@@ -25,9 +25,12 @@ class UIComponents:
             background-color: #f7f9fc;
         }
 
-        /* ================= SIDEBAR STABILITY ================= */
+        /* =====================================================
+           SIDEBAR STABILITY (NO DISTORTION)
+           ===================================================== */
+
         section[data-testid="stSidebar"] {
-            min-width: 320px !important;
+            min-width: 320px !important;   /* ~25% on laptop screens */
             max-width: 420px;
         }
 
@@ -35,10 +38,12 @@ class UIComponents:
             overflow-x: hidden;
         }
 
+        /* Prevent sidebar widgets from shrinking */
         section[data-testid="stSidebar"] * {
             white-space: nowrap;
         }
 
+        /* File uploader must never collapse */
         div[data-testid="stFileUploader"] {
             min-width: 100% !important;
         }
@@ -47,21 +52,30 @@ class UIComponents:
             min-height: 110px;
         }
 
-        /* ================= BUTTON FIX ================= */
+        /* =====================================================
+           BUTTON TEXT – NEVER WRAP
+           ===================================================== */
+
         button,
         div[data-testid="stButton"] button {
             white-space: nowrap !important;
             min-width: max-content;
         }
 
-        /* ================= APP CONTAINER ================= */
+        /* =====================================================
+           APP CONTAINER
+           ===================================================== */
+
         .app-container {
             max-width: 1100px;
             margin: auto;
             width: 100%;
         }
 
-        /* ================= STUDY BANNER ================= */
+        /* =====================================================
+           STUDY BANNER
+           ===================================================== */
+
         .study-banner {
             background: linear-gradient(135deg, #1e88e5, #42a5f5);
             padding: 1rem 2rem;
@@ -83,7 +97,10 @@ class UIComponents:
             max-width: 700px;
         }
 
-        /* ================= REMOVE INPUT OUTLINE ================= */
+        /* =====================================================
+           REMOVE INPUT OUTLINE
+           ===================================================== */
+
         div[data-baseweb="input"] > div:focus-within {
             outline: none !important;
             box-shadow: none !important;
@@ -96,7 +113,10 @@ class UIComponents:
             box-shadow: none !important;
         }
 
-        /* ================= CHAT UI ================= */
+        /* =====================================================
+           CHAT UI
+           ===================================================== */
+
         .chat-wrapper {
             display: flex;
             flex-direction: column;
@@ -148,28 +168,6 @@ class UIComponents:
         .thinking {
             font-style: italic;
             color: #888;
-        }
-
-        /* ================= RESPONSE DETAILS ================= */
-        .response-meta {
-            margin-top: 0.75rem;
-            padding-top: 0.6rem;
-            border-top: 1px dashed #e3e7ef;
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.4rem 0.8rem;
-            font-size: 0.82rem;
-            color: #555;
-        }
-
-        .response-meta span {
-            background: #f7f9fc;
-            padding: 0.25rem 0.45rem;
-            border-radius: 6px;
-        }
-
-        .response-meta strong {
-            color: #333;
         }
 
         .footer {
@@ -264,34 +262,15 @@ class UIComponents:
                         <div class="user-chat-icon">🧑</div>
                     </div>
                 """, unsafe_allow_html=True)
-
             else:
                 content = msg["content"]
                 if msg.get("is_thinking"):
                     content = f"<span class='thinking'>{content}</span>"
 
-                confidence = msg.get("confidence", "N/A")
-                quality = msg.get("quality", "N/A")
-                retrieval = msg.get("retrieval_level", "N/A")
-                specificity = msg.get("specificity", 0.0)
-                completeness = msg.get("completeness", 0.0)
-                corrected = "Yes" if msg.get("was_corrected") else "No"
-
                 st.markdown(f"""
                     <div class="chat-row bot">
                         <div class="bot-icon">🤖</div>
-                        <div class="assistant-bubble">
-                            <div class="assistant-content">{content}</div>
-
-                            <div class="response-meta">
-                                <span><strong>Confidence:</strong> {confidence}</span>
-                                <span><strong>Quality:</strong> {quality}</span>
-                                <span><strong>Retrieval:</strong> {retrieval}</span>
-                                <span><strong>Corrected:</strong> {corrected}</span>
-                                <span><strong>Specificity:</strong> {specificity:.1f}%</span>
-                                <span><strong>Completeness:</strong> {completeness:.1f}%</span>
-                            </div>
-                        </div>
+                        <div class="assistant-bubble">{content}</div>
                     </div>
                 """, unsafe_allow_html=True)
 
