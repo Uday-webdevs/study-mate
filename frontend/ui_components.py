@@ -16,6 +16,7 @@ class UIComponents:
             layout="wide"
         )
 
+    # ---------------- Global CSS ----------------
     @staticmethod
     def apply_custom_css():
         st.markdown("""
@@ -24,19 +25,43 @@ class UIComponents:
             background-color: #f7f9fc;
         }
 
+        /* ================= SIDEBAR STABILITY ================= */
+        section[data-testid="stSidebar"] {
+            min-width: 320px !important;
+            max-width: 420px;
+        }
+
+        section[data-testid="stSidebar"] > div {
+            overflow-x: hidden;
+        }
+
+        section[data-testid="stSidebar"] * {
+            white-space: nowrap;
+        }
+
+        div[data-testid="stFileUploader"] {
+            min-width: 100% !important;
+        }
+
+        div[data-testid="stFileUploader"] section {
+            min-height: 110px;
+        }
+
+        /* ================= BUTTON FIX ================= */
+        button,
+        div[data-testid="stButton"] button {
+            white-space: nowrap !important;
+            min-width: max-content;
+        }
+
+        /* ================= APP CONTAINER ================= */
         .app-container {
             max-width: 1100px;
             margin: auto;
             width: 100%;
         }
 
-        /* ===== GLOBAL BUTTON FIX ===== */
-        button, 
-        div[data-testid="stButton"] button {
-            white-space: nowrap !important;
-        }
-
-        /* ===== STUDY BANNER ===== */
+        /* ================= STUDY BANNER ================= */
         .study-banner {
             background: linear-gradient(135deg, #1e88e5, #42a5f5);
             padding: 1rem 2rem;
@@ -58,7 +83,7 @@ class UIComponents:
             max-width: 700px;
         }
 
-        /* ===== REMOVE INPUT OUTLINE ===== */
+        /* ================= REMOVE INPUT OUTLINE ================= */
         div[data-baseweb="input"] > div:focus-within {
             outline: none !important;
             box-shadow: none !important;
@@ -71,7 +96,7 @@ class UIComponents:
             box-shadow: none !important;
         }
 
-        /* ===== CHAT AREA ===== */
+        /* ================= CHAT UI ================= */
         .chat-wrapper {
             display: flex;
             flex-direction: column;
@@ -79,7 +104,6 @@ class UIComponents:
             margin-top: 1.5rem;
         }
 
-        /* ===== MESSAGE ROWS ===== */
         .chat-row {
             display: flex;
             align-items: flex-end;
@@ -95,18 +119,14 @@ class UIComponents:
             justify-content: flex-start;
         }
 
-        /* ===== ICONS ===== */
         .user-chat-icon {
             font-size: 1.8rem;
-            line-height: 1;
         }
 
         .bot-icon {
             font-size: 2.5rem;
-            line-height: 1;
         }
 
-        /* ===== USER BUBBLE ===== */
         .user-bubble {
             background: linear-gradient(135deg, #1e88e5, #42a5f5);
             color: white;
@@ -114,10 +134,8 @@ class UIComponents:
             border-radius: 18px 18px 4px 18px;
             max-width: 70%;
             box-shadow: 0 6px 14px rgba(0,0,0,0.12);
-            word-wrap: break-word;
         }
 
-        /* ===== BOT BUBBLE ===== */
         .assistant-bubble {
             background: white;
             padding: 1rem;
@@ -127,13 +145,31 @@ class UIComponents:
             border: 1px solid #eef1f6;
         }
 
-        .assistant-content {
-            margin-top: 0.25rem;
-        }
-
         .thinking {
             font-style: italic;
             color: #888;
+        }
+
+        /* ================= RESPONSE DETAILS ================= */
+        .response-meta {
+            margin-top: 0.75rem;
+            padding-top: 0.6rem;
+            border-top: 1px dashed #e3e7ef;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.4rem 0.8rem;
+            font-size: 0.82rem;
+            color: #555;
+        }
+
+        .response-meta span {
+            background: #f7f9fc;
+            padding: 0.25rem 0.45rem;
+            border-radius: 6px;
+        }
+
+        .response-meta strong {
+            color: #333;
         }
 
         .footer {
@@ -151,9 +187,7 @@ class UIComponents:
         <div class="app-container">
             <div class="study-banner">
                 <h1>📖 StudyMate</h1>
-                <p>
-                    Your AI-powered study companion for understanding documents effortlessly.
-                </p>
+                <p>Your AI-powered study companion for understanding documents effortlessly.</p>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -174,7 +208,7 @@ class UIComponents:
                 help="Upload study material in PDF format"
             )
 
-            upload_clicked = st.button("📤 Upload & Index")
+            upload_clicked = st.button("📤 Upload")
             sample_clicked = st.button("📚 Load Sample Data")
 
             if upload_clicked and uploaded_file:
@@ -197,7 +231,6 @@ class UIComponents:
     @staticmethod
     def render_chat_interface(chat_history):
         st.markdown("<div class='app-container'>", unsafe_allow_html=True)
-
         st.markdown("### 💬 Ask a question")
 
         with st.form("chat_form", clear_on_submit=True):
@@ -223,37 +256,46 @@ class UIComponents:
 
         st.markdown("<div class='chat-wrapper'>", unsafe_allow_html=True)
 
-        if chat_history:
-            for msg in chat_history[::-1]:
-                if msg["role"] == "user":
-                    st.markdown(
-                        f"""
-                        <div class="chat-row user">
-                            <div class="user-bubble">{msg['content']}</div>
-                            <div class="user-chat-icon">🧑</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                else:
-                    content = msg["content"]
-                    if msg.get("is_thinking"):
-                        content = f"<span class='thinking'>{content}</span>"
+        for msg in reversed(chat_history):
+            if msg["role"] == "user":
+                st.markdown(f"""
+                    <div class="chat-row user">
+                        <div class="user-bubble">{msg['content']}</div>
+                        <div class="user-chat-icon">🧑</div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                    st.markdown(
-                        f"""
-                        <div class="chat-row bot">
-                            <div class="bot-icon">🤖</div>
-                            <div class="assistant-bubble">
-                                <div class="assistant-content">{content}</div>
+            else:
+                content = msg["content"]
+                if msg.get("is_thinking"):
+                    content = f"<span class='thinking'>{content}</span>"
+
+                confidence = msg.get("confidence", "N/A")
+                quality = msg.get("quality", "N/A")
+                retrieval = msg.get("retrieval_level", "N/A")
+                specificity = msg.get("specificity", 0.0)
+                completeness = msg.get("completeness", 0.0)
+                corrected = "Yes" if msg.get("was_corrected") else "No"
+
+                st.markdown(f"""
+                    <div class="chat-row bot">
+                        <div class="bot-icon">🤖</div>
+                        <div class="assistant-bubble">
+                            <div class="assistant-content">{content}</div>
+
+                            <div class="response-meta">
+                                <span><strong>Confidence:</strong> {confidence}</span>
+                                <span><strong>Quality:</strong> {quality}</span>
+                                <span><strong>Retrieval:</strong> {retrieval}</span>
+                                <span><strong>Corrected:</strong> {corrected}</span>
+                                <span><strong>Specificity:</strong> {specificity:.1f}%</span>
+                                <span><strong>Completeness:</strong> {completeness:.1f}%</span>
                             </div>
                         </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+                    </div>
+                """, unsafe_allow_html=True)
 
         st.markdown("</div></div>", unsafe_allow_html=True)
-
         return (user_query, False) if submit and user_query.strip() else (None, False)
 
     # ---------------- Footer ----------------

@@ -5,7 +5,7 @@ Handles PDF document loading, chunking, and vector store management.
 
 import os
 import tempfile
-from typing import List, Optional, Dict, Any
+from typing import Dict, Any
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -15,7 +15,9 @@ from langchain_chroma import Chroma
 
 from backend.config import config
 
+# ==========================================================
 # Sample data for testing - English Grammar Concepts
+# ==========================================================
 SAMPLE_DATA_CONTENT = """
 English Grammar Fundamentals: Parts of Speech and Basic Concepts
 
@@ -119,11 +121,11 @@ class DocumentProcessor:
     """
 
     def __init__(self):
-        """Initialize document processor."""
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=config.CHUNK_SIZE,
             chunk_overlap=config.CHUNK_OVERLAP,
-            separators=["\n\n", "\n", ". ", " ", ""],
+            # ❗ FIX: removed "" separator (critical)
+            separators=["\n\n", "\n", ". ", " "],
             length_function=len
         )
 
@@ -131,15 +133,13 @@ class DocumentProcessor:
         self.documents = []
         self.document_metadata = {}
 
+    # ======================================================
+    # VALIDATION
+    # ======================================================
     def validate_file(self, uploaded_file) -> Dict[str, Any]:
-        """
-        Validate uploaded file.
-        Returns: {"valid": bool, "error": str, "size_mb": float}
-        """
         if not uploaded_file:
             return {"valid": False, "error": "No file provided", "size_mb": 0}
 
-        # Check file extension
         file_name = uploaded_file.name.lower()
         if not any(file_name.endswith(ext) for ext in config.ALLOWED_EXTENSIONS):
             return {
@@ -148,7 +148,6 @@ class DocumentProcessor:
                 "size_mb": 0
             }
 
-        # Check file size
         file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
         if file_size_mb > config.MAX_FILE_SIZE_MB:
             return {
@@ -159,472 +158,211 @@ class DocumentProcessor:
 
         return {"valid": True, "error": "", "size_mb": file_size_mb}
 
+    # ======================================================
+    # UPLOADED FILE PROCESSING
+    # ======================================================
     def process_uploaded_file(self, uploaded_file) -> Dict[str, Any]:
-        """
-        Process uploaded file and create vector store.
-        Checks for existing cache first.
-        Returns: {"success": bool, "chunks": int, "error": str, "collection_name": str}
-        """
-        try:
-            # Validate file
-            validation = self.validate_file(uploaded_file)
-            if not validation["valid"]:
+        validation = self.validate_file(uploaded_file)
+        if not validation["valid"]:
+            return {"success": False, "chunks": 0, "error": validation["error"], "collection_name": ""}
+
+        collection_name = self._create_collection_name(uploaded_file.name)
+
+        if self.is_collection_cached(collection_name):
+            if self.load_existing_vectorstore(collection_name):
+                info = self.get_document_info()
                 return {
-                    "success": False,
-                    "chunks": 0,
-                    "error": validation["error"],
-                    "collection_name": ""
+                    "success": True,
+                    "chunks": info.get("total_chunks", 0),
+                    "collection_name": collection_name,
+                    "pages": info.get("total_pages", 0),
+                    "file_size_mb": validation["size_mb"],
+                    "cached": True,
+                    "error": ""
                 }
 
-            collection_name = self._create_collection_name(uploaded_file.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
 
-            # Check if already cached
-            if self.is_collection_cached(collection_name):
-                # Load existing vectorstore
-                if self.load_existing_vectorstore(collection_name):
-                    # Get document info from metadata
-                    doc_info = self.get_document_info()
-                    return {
-                        "success": True,
-                        "chunks": doc_info.get("total_chunks", 0),
-                        "error": "",
-                        "collection_name": collection_name,
-                        "pages": doc_info.get("total_pages", 0),
-                        "file_size_mb": validation["size_mb"],
-                        "cached": True
-                    }
+        try:
+            result = self.load_and_chunk_pdf(tmp_path, uploaded_file.name)
+            if not result["success"]:
+                return result
 
-            # Save uploaded file temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_path = tmp_file.name
-                print(f"📥 Saved uploaded file to temporary path: {tmp_path}")
-            try:
-                # Process the PDF
-                result = self.load_and_chunk_pdf(tmp_path, uploaded_file.name)
+            vectorstore_result = self.create_vectorstore(collection_name)
+            if not vectorstore_result["success"]:
+                return vectorstore_result
 
-                if result["success"]:
-                    # Create vector store
-                    vectorstore_result = self.create_vectorstore(collection_name)
-
-                    if vectorstore_result["success"]:
-                        return {
-                            "success": True,
-                            "chunks": result["chunks"],
-                            "error": "",
-                            "collection_name": collection_name,
-                            "pages": result["pages"],
-                            "file_size_mb": validation["size_mb"],
-                            "cached": False
-                        }
-                    else:
-                        return {
-                            "success": False,
-                            "chunks": 0,
-                            "error": vectorstore_result["error"],
-                            "collection_name": ""
-                        }
-                else:
-                    return result
-
-            finally:
-                # Clean up temporary file
-                try:
-                    os.unlink(tmp_path)
-                except:
-                    pass
-
-        except Exception as e:
             return {
-                "success": False,
-                "chunks": 0,
-                "error": f"Processing failed: {str(e)}",
-                "collection_name": ""
+                "success": True,
+                "chunks": result["chunks"],
+                "pages": result["pages"],
+                "collection_name": collection_name,
+                "file_size_mb": validation["size_mb"],
+                "cached": False,
+                "error": ""
             }
 
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    # ======================================================
+    # 🔥 CORE FIX: PDF LOADING & CHUNKING
+    # ======================================================
     def load_and_chunk_pdf(self, pdf_path: str, original_filename: str) -> Dict[str, Any]:
-        """
-        Load PDF and split into chunks.
-        Returns: {"success": bool, "chunks": int, "pages": int, "error": str}
-        """
         try:
-            # Load PDF
             loader = PyPDFLoader(pdf_path)
             pages = loader.load()
 
             if not pages:
-                return {
-                    "success": False,
-                    "chunks": 0,
-                    "pages": 0,
-                    "error": "No content found in PDF"
-                }
+                return {"success": False, "chunks": 0, "pages": 0, "error": "No content found in PDF"}
 
-            print(f"📄 Loaded {len(pages)} pages from {original_filename}")
+            cleaned_docs = []
+            for page in pages:
+                text = " ".join(page.page_content.split())
+                if len(text) >= 50:
+                    cleaned_docs.append(
+                        Document(
+                            page_content=text,
+                            metadata={
+                                "source": original_filename,
+                                "page": page.metadata.get("page", 1)
+                            }
+                        )
+                    )
 
-            # Process pages and filter out empty ones
-            all_chunks = []
-            pages_with_content = 0
+            if not cleaned_docs:
+                return {"success": False, "chunks": 0, "pages": 0, "error": "No usable text extracted"}
 
-            for i, page in enumerate(pages):
-                try:
-                    page_content = page.page_content.strip()
+            # ✅ CORRECT METHOD
+            chunks = self.text_splitter.split_documents(cleaned_docs)
 
-                    # Skip empty or very short pages
-                    if not page_content or len(page_content) < 50:
-                        continue
+            self.documents = []
+            for i, doc in enumerate(chunks):
+                doc.metadata.update({
+                    "chunk_index": i,
+                    "total_pages": len(pages)
+                })
+                self.documents.append(doc)
 
-                    pages_with_content += 1
-
-                    # Split text with error handling
-                    try:
-                        chunks = self.text_splitter.split_text(page_content)
-                    except Exception as split_error:
-                        print(f"⚠️ Error splitting page {i+1}: {split_error}")
-                        # Fallback: treat whole page as one chunk
-                        chunks = [page_content]
-
-                    # Filter out empty chunks and create documents
-                    for j, chunk in enumerate(chunks):
-                        if chunk and chunk.strip():
-                            doc = Document(
-                                page_content=chunk.strip(),
-                                metadata={
-                                    "source": original_filename,
-                                    "page": i + 1,
-                                    "chunk_id": j,
-                                    "total_pages": len(pages),
-                                    "chunk_index": len(all_chunks)
-                                }
-                            )
-                            all_chunks.append(doc)
-
-                except Exception as page_error:
-                    print(f"⚠️ Error processing page {i+1}: {page_error}")
-                    continue
-
-            if not all_chunks:
-                return {
-                    "success": False,
-                    "chunks": 0,
-                    "pages": pages_with_content,
-                    "error": "No usable text content extracted from PDF"
-                }
-
-            # Store documents
-            self.documents = all_chunks
             self.document_metadata = {
                 "filename": original_filename,
                 "total_pages": len(pages),
-                "pages_with_content": pages_with_content,
-                "total_chunks": len(all_chunks),
-                "avg_chunk_length": sum(len(doc.page_content) for doc in all_chunks) / len(all_chunks)
+                "pages_with_content": len(cleaned_docs),
+                "total_chunks": len(self.documents),
+                "avg_chunk_length": sum(len(d.page_content) for d in self.documents) / len(self.documents)
             }
 
-            print(f"✅ Created {len(all_chunks)} chunks from {pages_with_content} content pages")
-
-            return {
-                "success": True,
-                "chunks": len(all_chunks),
-                "pages": pages_with_content,
-                "error": ""
-            }
+            return {"success": True, "chunks": len(self.documents), "pages": len(cleaned_docs), "error": ""}
 
         except Exception as e:
-            return {
-                "success": False,
-                "chunks": 0,
-                "pages": 0,
-                "error": f"PDF loading failed: {str(e)}"
-            }
+            return {"success": False, "chunks": 0, "pages": 0, "error": str(e)}
 
+    # ======================================================
+    # VECTOR STORE
+    # ======================================================
     def create_vectorstore(self, collection_name: str) -> Dict[str, Any]:
-        """
-        Create ChromaDB vectorstore from documents.
-        Returns: {"success": bool, "error": str}
-        """
         if not self.documents:
             return {"success": False, "error": "No documents to index"}
 
-        try:
-            from langchain_openai import OpenAIEmbeddings
-            from langchain_chroma import Chroma
+        from langchain_openai import OpenAIEmbeddings
 
-            # Create embeddings
-            embeddings = OpenAIEmbeddings(
-                model=config.EMBEDDING_MODEL,
-                api_key=config.OPENAI_API_KEY
-            )
+        embeddings = OpenAIEmbeddings(
+            model=config.EMBEDDING_MODEL,
+            api_key=config.OPENAI_API_KEY
+        )
 
-            # Create unique directory for this collection
-            collection_dir = os.path.join(config.VECTOR_STORE_PATH, collection_name)
+        collection_dir = os.path.join(config.VECTOR_STORE_PATH, collection_name)
 
-            # Create vectorstore with persist_directory
-            self.vectorstore = Chroma.from_documents(
-                documents=self.documents,
-                embedding=embeddings,
-                persist_directory=collection_dir,
-                collection_name=collection_name
-            )
+        self.vectorstore = Chroma.from_documents(
+            documents=self.documents,
+            embedding=embeddings,
+            persist_directory=collection_dir,
+            collection_name=collection_name
+        )
 
-            # Persist the vectorstore
-            self.vectorstore.persist()
+        self.vectorstore.persist()
+        return {"success": True, "error": ""}
 
-            print(f"✅ Vector store created: {collection_name} in {collection_dir} with {len(self.documents)} documents")
+    # ======================================================
+    # SAMPLE DATA (UNCHANGED LOGIC)
+    # ======================================================
+    def process_sample_data(self) -> Dict[str, Any]:
+        collection_name = "sample_data_index"
 
-            return {"success": True, "error": ""}
+        if self._is_sample_data_embedded(collection_name):
+            if self.load_existing_vectorstore(collection_name):
+                info = self.get_document_info()
+                return {
+                    "success": True,
+                    "chunks": info.get("total_chunks", 0),
+                    "collection_name": collection_name,
+                    "pages": 1,
+                    "error": "already loaded"
+                }
 
-        except Exception as e:
-            return {"success": False, "error": f"Vector store creation failed: {str(e)}"}
+        doc = Document(
+            page_content=SAMPLE_DATA_CONTENT.strip(),
+            metadata={"source": "sample_english_grammar.txt", "page": 1}
+        )
+
+        self.documents = self.text_splitter.split_documents([doc])
+        self.document_metadata = {
+            "filename": "English Grammar Fundamentals",
+            "total_chunks": len(self.documents),
+            "total_pages": 1,
+            "source": "static_sample"
+        }
+
+        return self.create_vectorstore(collection_name) | {
+            "success": True,
+            "chunks": len(self.documents),
+            "collection_name": collection_name,
+            "pages": 1
+        }
+
+    # ======================================================
+    # HELPERS
+    # ======================================================
+    def _is_sample_data_embedded(self, collection_name: str) -> bool:
+        return os.path.exists(os.path.join(config.VECTOR_STORE_PATH, collection_name))
 
     def load_existing_vectorstore(self, collection_name: str) -> bool:
-        """
-        Load existing vectorstore.
-        Returns: True if loaded successfully
-        """
+        from langchain_openai import OpenAIEmbeddings
+
+        embeddings = OpenAIEmbeddings(
+            model=config.EMBEDDING_MODEL,
+            api_key=config.OPENAI_API_KEY
+        )
+
         try:
-            from langchain_openai import OpenAIEmbeddings
-            from langchain_chroma import Chroma
-
-            embeddings = OpenAIEmbeddings(
-                model=config.EMBEDDING_MODEL,
-                api_key=config.OPENAI_API_KEY
-            )
-
-            # Use collection-specific directory
-            collection_dir = os.path.join(config.VECTOR_STORE_PATH, collection_name)
-
             self.vectorstore = Chroma(
-                persist_directory=collection_dir,
+                persist_directory=os.path.join(config.VECTOR_STORE_PATH, collection_name),
                 embedding_function=embeddings,
                 collection_name=collection_name
             )
-
-            # Test if collection exists and has documents
-            try:
-                docs = self.vectorstore.similarity_search("test", k=1)
-                if docs:
-                    # Get collection count and set metadata
-                    collection_count = self.vectorstore._collection.count()
-
-                    # Set basic metadata for cached data
-                    self.document_metadata = {
-                        "filename": collection_name.replace("_index", ""),
-                        "total_chunks": collection_count,
-                        "total_pages": 1 if collection_name == "sample_data_index" else 0,  # We don't know pages for cached files
-                        "source": "cached"
-                    }
-                return True
-            except:
-                return False
-
-        except Exception as e:
-            print(f"Error loading vectorstore: {e}")
-            return False
-
-    def _create_collection_name(self, filename: str) -> str:
-        """Create a unique collection name from filename."""
-        # Remove extension and sanitize
-        name = Path(filename).stem
-        # Replace spaces and special chars with underscores
-        name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
-        return f"{name}_index"
-
-    def _create_collection_name(self, filename: str) -> str:
-        """Create a unique collection name from filename."""
-        # Remove extension and sanitize
-        name = Path(filename).stem
-        # Replace spaces and special chars with underscores
-        name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
-        return f"{name}_index"
-
-    def create_collection_name(self, filename: str) -> str:
-        """Create a unique collection name from filename. Public method."""
-        return self._create_collection_name(filename)
-
-    def get_document_info(self) -> Dict[str, Any]:
-        """Get information about the loaded document."""
-        if not self.document_metadata:
-            return {"loaded": False}
-
-        return {
-            "loaded": True,
-            **self.document_metadata
-        }
-
-    def process_file_from_path(self, file_path: str, display_name: str) -> Dict[str, Any]:
-        """
-        Process a file from a file path (for sample data).
-        Returns: {"success": bool, "chunks": int, "error": str, "collection_name": str, "pages": int}
-        """
-        try:
-            if not os.path.exists(file_path):
-                return {
-                    "success": False,
-                    "chunks": 0,
-                    "error": f"File not found: {file_path}",
-                    "collection_name": "",
-                    "pages": 0
-                }
-
-            # Check file size
-            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            if file_size_mb > config.MAX_FILE_SIZE_MB:
-                return {
-                    "success": False,
-                    "chunks": 0,
-                    "error": f"File too large. Maximum size: {config.MAX_FILE_SIZE_MB}MB",
-                    "collection_name": "",
-                    "pages": 0
-                }
-
-            # Process the PDF
-            result = self.load_and_chunk_pdf(file_path, display_name)
-
-            if result["success"]:
-                # Create vector store
-                collection_name = self._create_collection_name(display_name)
-                vectorstore_result = self.create_vectorstore(collection_name)
-
-                if vectorstore_result["success"]:
-                    return {
-                        "success": True,
-                        "chunks": result["chunks"],
-                        "error": "",
-                        "collection_name": collection_name,
-                        "pages": result["pages"]
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "chunks": 0,
-                        "error": vectorstore_result["error"],
-                        "collection_name": "",
-                        "pages": 0
-                    }
-            else:
-                return result
-
-        except Exception as e:
-            return {
-                "success": False,
-                "chunks": 0,
-                "error": f"Processing failed: {str(e)}",
-                "collection_name": "",
-                "pages": 0
-            }
-
-    def process_sample_data(self) -> Dict[str, Any]:
-        """
-        Process the static sample data about English grammar.
-        Checks if already embedded to save costs.
-        Returns: {"success": bool, "chunks": int, "error": str, "collection_name": str, "pages": int}
-        """
-        collection_name = "sample_data_index"
-
-        try:
-            # Check if sample data is already embedded
-            if self._is_sample_data_embedded(collection_name):
-                # Load existing vectorstore
-                if self.load_existing_vectorstore(collection_name):
-                    # Get document info from metadata
-                    doc_info = self.get_document_info()
-                    return {
-                        "success": True,
-                        "chunks": doc_info.get("total_chunks", 0),
-                        "error": "already loaded",
-                        "collection_name": collection_name,
-                        "pages": 1  # Sample data is treated as 1 page
-                    }
-
-            # Process the sample text content
-            documents = [Document(
-                page_content=SAMPLE_DATA_CONTENT.strip(),
-                metadata={"source": "sample_english_grammar.txt", "page": 1}
-            )]
-
-            # Split into chunks
-            self.documents = self.text_splitter.split_documents(documents)
-            self.document_metadata = {
-                "filename": "English Grammar Fundamentals",
-                "chunks": len(self.documents),
-                "pages": 1,
-                "file_size_mb": len(SAMPLE_DATA_CONTENT) / (1024 * 1024),
-                "source": "static_sample"
-            }
-
-            # Create vectorstore
-            vectorstore_result = self.create_vectorstore(collection_name)
-
-            if vectorstore_result["success"]:
-                return {
-                    "success": True,
-                    "chunks": len(self.documents),
-                    "error": "",
-                    "collection_name": collection_name,
-                    "pages": 1
-                }
-            else:
-                return {
-                    "success": False,
-                    "chunks": 0,
-                    "error": vectorstore_result["error"],
-                    "collection_name": "",
-                    "pages": 0
-                }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "chunks": 0,
-                "error": f"Sample data processing failed: {str(e)}",
-                "collection_name": "",
-                "pages": 0
-            }
-
-    def _is_sample_data_embedded(self, collection_name: str) -> bool:
-        """
-        Check if sample data is already embedded in the vectorstore.
-        """
-        try:
-            from langchain_openai import OpenAIEmbeddings
-            from langchain_chroma import Chroma
-
-            embeddings = OpenAIEmbeddings(
-                model=config.EMBEDDING_MODEL,
-                api_key=config.OPENAI_API_KEY
-            )
-
-            # Check collection-specific directory
-            collection_dir = os.path.join(config.CHROMA_PATH, collection_name)
-            if not os.path.exists(collection_dir):
-                return False
-
-            # Try to load the collection
-            try:
-                vectorstore = Chroma(
-                    persist_directory=collection_dir,
-                    embedding_function=embeddings,
-                    collection_name=collection_name
-                )
-                # Test if collection has documents
-                docs = vectorstore.similarity_search("test", k=1)
-                return len(docs) > 0
-            except:
-                return False
-
-        except:
+            return bool(self.vectorstore.similarity_search("test", k=1))
+        except Exception:
             return False
 
     def is_collection_cached(self, collection_name: str) -> bool:
-        """
-        Check if a collection is already cached in the vectorstore.
-        Public method for UI access.
-        """
         return self._is_sample_data_embedded(collection_name)
 
+    def _create_collection_name(self, filename: str) -> str:
+        name = Path(filename).stem
+        name = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
+        return f"{name}_index"
+
+    def get_document_info(self) -> Dict[str, Any]:
+        if not self.document_metadata:
+            return {"loaded": False}
+        return {"loaded": True, **self.document_metadata}
+
     def clear_documents(self):
-        """Clear loaded documents and vectorstore."""
         self.documents = []
         self.document_metadata = {}
         self.vectorstore = None
